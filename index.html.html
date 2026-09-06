@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bloco Encaixe 8x8</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  html, body {
+    margin: 0;
+    background: #1a1a2e;
+    font-family: Arial, sans-serif;
+    color: #fff;
+    overscroll-behavior: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 10px;
+  }
+  h1 { margin: 6px 0; font-size: clamp(18px, 5vw, 26px); text-align: center; }
+  #hud {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 420px;
+    margin-bottom: 10px;
+    font-size: clamp(14px, 4vw, 20px);
+    font-weight: bold;
+  }
+  #boardWrap {
+    position: relative;
+    width: 100%;
+    max-width: 420px;
+  }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    gap: 3px;
+    background: #0f0f1e;
+    border: 4px solid #fff;
+    border-radius: 8px;
+    padding: 6px;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+  }
+  .cell {
+    background: #2c2c44;
+    border-radius: 4px;
+  }
+  .cell.filled {
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.25);
+  }
+  .cell.preview-ok {
+    box-shadow: inset 0 0 0 3px #2ecc71;
+    background: #26523f;
+  }
+  .cell.preview-bad {
+    box-shadow: inset 0 0 0 3px #e74c3c;
+    background: #522626;
+  }
+  #trayWrap {
+    width: 100%;
+    max-width: 420px;
+    margin-top: 14px;
+  }
+  #tray {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .piece-slot {
+    flex: 1;
+    min-height: 90px;
+    background: #16213e;
+    border: 2px solid #333;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    touch-action: none;
+  }
+  .piece-slot.empty { opacity: 0.3; }
+  .piece-slot.dragging-source { opacity: 0.25; }
+  .piece-grid {
+    display: grid;
+    gap: 3px;
+  }
+  .piece-cell {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+  }
+  .piece-cell.on { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3); }
+  .piece-cell.off { background: transparent; }
+  #confetti {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    background: rgba(0,0,0,0.88);
+    padding: clamp(18px, 6vw, 30px) clamp(20px, 8vw, 40px);
+    border-radius: 12px;
+    display: none;
+    width: 80%;
+    max-width: 300px;
+    z-index: 10;
+  }
+  #overlay h2 { margin-top: 0; }
+  button {
+    padding: 12px 22px;
+    font-size: 16px;
+    cursor: pointer;
+    border: none;
+    border-radius: 6px;
+    background: #e94560;
+    color: #fff;
+    margin-top: 10px;
+  }
+  button:hover { background: #c93250; }
+  p.instrucoes { color: #ccc; font-size: 13px; margin-top: 12px; text-align: center; max-width: 420px; }
+
+  /* peça sendo arrastada (segue o dedo/mouse) */
+  #dragGhost {
+    position: fixed;
+    pointer-events: none;
+    display: none;
+    z-index: 999;
+    opacity: 0.85;
+  }
+  .ghost-cell {
+    position: absolute;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<h1>🧩 Bloco Encaixe 8x8</h1>
+<div id="hud">
+  <span>Pontos: <span id="score">0</span></span>
+  <span>Recorde: <span id="highscore">0</span></span>
+</div>
+<div id="boardWrap">
+  <div id="board"></div>
+  <canvas id="confetti"></canvas>
+  <div id="overlay">
+    <h2>Sem espaço!</h2>
+    <p id="overlayScore">Pontos: 0</p>
+    <button id="restartBtn">Jogar novamente</button>
+  </div>
+</div>
+<div id="trayWrap">
+  <div id="tray"></div>
+</div>
+<p class="instrucoes">Arraste uma peça da bandeja até o tabuleiro. Complete uma linha ou coluna inteira para explodir os blocos e ganhar pontos.</p>
+<div id="dragGhost"></div>
+
+<script>
+const SIZE = 8;
+const boardEl = document.getElementById('board');
+const trayEl = document.getElementById('tray');
+const scoreEl = document.getElementById('score');
+const highscoreEl = document.getElementById('highscore');
+const overlayEl = document.getElementById('overlay');
+const overlayScoreEl = document.getElementById('overlayScore');
+const dragGhost = document.getElementById('dragGhost');
+
+const PALETTES = [
+  ['#e94560', '#3498db', '#f1c40f', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c'],
+  ['#ff6b81', '#4aa3ff', '#ffd93d', '#3ddc84', '#c86bff', '#ff9f43', '#00d4c0'],
+  ['#c0392b', '#1f6fb2', '#c9960c', '#1e8449', '#6c3483', '#af601a', '#0e6655'],
+  ['#ff8fa3', '#7fc4ff', '#ffe98a', '#7be8a4', '#e0a3ff', '#ffc48a', '#7fe8dc'],
+  ['#9b2226', '#023e8a', '#7f5a00', '#146b3a', '#4a1e6e', '#8a4200', '#0b4d47']
+];
+let paletteIdx = 0;
+let COLORS = PALETTES[0];
+
+const confettiCanvas = document.getElementById('confetti');
+const confettiCtx = confettiCanvas.getContext('2d');
+let confettiParticles = [];
+let confettiRunning = false;
+
+function resizeConfettiCanvas() {
+  const rect = boardEl.getBoundingClientRect();
+  confettiCanvas.width = rect.width;
+  confettiCanvas.height = rect.height;
+}
+
+function launchConfetti(count = 40) {
+  resizeConfettiCanvas();
+  const w = confettiCanvas.width;
+  for (let i = 0; i < count; i++) {
+    confettiParticles.push({
+      x: Math.random() * w,
+      y: -10 - Math.random() * 40,
+      vx: (Math.random() - 0.5) * 4,
+      vy: 2 + Math.random() * 3,
+      size: 4 + Math.random() * 5,
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      rot: Math.random() * Math.PI,
+      vrot: (Math.random() - 0.5) * 0.3,
+      life: 0,
+      maxLife: 45 + Math.random() * 20
+    });
+  }
+  if (!confettiRunning) {
+    confettiRunning = true;
+    requestAnimationFrame(confettiLoop);
+  }
+}
+
+function confettiLoop() {
+  confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+  confettiParticles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15;
+    p.rot += p.vrot;
+    p.life++;
+    confettiCtx.save();
+    confettiCtx.translate(p.x, p.y);
+    confettiCtx.rotate(p.rot);
+    confettiCtx.globalAlpha = Math.max(0, 1 - p.life / p.maxLife);
+    confettiCtx.fillStyle = p.color;
+    confettiCtx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+    confettiCtx.restore();
+  });
+  confettiParticles = confettiParticles.filter(p => p.life < p.maxLife);
+  if (confettiParticles.length > 0) {
+    requestAnimationFrame(confettiLoop);
+  } else {
+    confettiRunning = false;
+    confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+  }
+}
+
+const SHAPES = [
+  [[1]],
+  [[1,1]],
+  [[1],[1]],
+  [[1,1,1]],
+  [[1],[1],[1]],
+  [[1,1],[1,1]],
+  [[1,1,1,1]],
+  [[1],[1],[1],[1]],
+  [[1,1,0],[0,1,1]],
+  [[0,1,1],[1,1,0]],
+  [[1,0],[1,0],[1,1]],
+  [[0,1],[0,1],[1,1]],
+  [[1,1],[1,0],[1,0]],
+  [[1,1],[0,1],[0,1]],
+  [[1,1,1],[0,1,0]],
+  [[1,1,1],[1,0,0]],
+  [[1,1,1],[0,0,1]],
+  [[1,1,1],[1,1,1]],
+  [[1,1,1],[1,0,1]]
+];
+
+let grid, cellColor, score, highscore, tray, dragging, cellEls;
+
+function init() {
+  grid = Array.from({length: SIZE}, () => Array(SIZE).fill(0));
+  cellColor = Array.from({length: SIZE}, () => Array(SIZE).fill(null));
+  paletteIdx = 0;
+  COLORS = PALETTES[paletteIdx];
+  score = 0;
+  highscore = Number(localStorage.getItem('blocoHighscore') || 0);
+  highscoreEl.textContent = highscore;
+  scoreEl.textContent = 0;
+  buildBoardDOM();
+  tray = [randomPiece(), randomPiece(), randomPiece()];
+  renderTray();
+  overlayEl.style.display = 'none';
+}
+
+function randomPiece() {
+  const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+  return { shape, color, used: false };
+}
+
+function buildBoardDOM() {
+  boardEl.innerHTML = '';
+  cellEls = [];
+  for (let r = 0; r < SIZE; r++) {
+    const row = [];
+    for (let c = 0; c < SIZE; c++) {
+      const div = document.createElement('div');
+      div.className = 'cell';
+      div.dataset.r = r;
+      div.dataset.c = c;
+      boardEl.appendChild(div);
+      row.push(div);
+    }
+    cellEls.push(row);
+  }
+  renderBoard();
+}
+
+function renderBoard() {
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const el = cellEls[r][c];
+      el.classList.remove('preview-ok', 'preview-bad');
+      if (grid[r][c]) {
+        el.classList.add('filled');
+        el.style.background = cellColor[r][c];
+      } else {
+        el.classList.remove('filled');
+        el.style.background = '';
+      }
+    }
+  }
+}
+
+function renderTray() {
+  trayEl.innerHTML = '';
+  tray.forEach((piece, idx) => {
+    const slot = document.createElement('div');
+    slot.className = 'piece-slot' + (piece.used ? ' empty' : '');
+    slot.dataset.idx = idx;
+    if (!piece.used) {
+      const pg = document.createElement('div');
+      pg.className = 'piece-grid';
+      const rows = piece.shape.length, cols = piece.shape[0].length;
+      pg.style.gridTemplateColumns = `repeat(${cols}, 16px)`;
+      pg.style.gridTemplateRows = `repeat(${rows}, 16px)`;
+      piece.shape.forEach(row => {
+        row.forEach(v => {
+          const pc = document.createElement('div');
+          pc.className = 'piece-cell ' + (v ? 'on' : 'off');
+          if (v) pc.style.background = piece.color;
+          pg.appendChild(pc);
+        });
+      });
+      slot.appendChild(pg);
+      attachDrag(slot, idx);
+    }
+    trayEl.appendChild(slot);
+  });
+}
+
+function canPlace(shape, r0, c0) {
+  for (let r = 0; r < shape.length; r++) {
+    for (let c = 0; c < shape[0].length; c++) {
+      if (!shape[r][c]) continue;
+      const rr = r0 + r, cc = c0 + c;
+      if (rr < 0 || rr >= SIZE || cc < 0 || cc >= SIZE) return false;
+      if (grid[rr][cc]) return false;
+    }
+  }
+  return true;
+}
+
+function anyPlacementPossible() {
+  for (const piece of tray) {
+    if (piece.used) continue;
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        if (canPlace(piece.shape, r, c)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function placePiece(piece, r0, c0) {
+  piece.shape.forEach((row, r) => {
+    row.forEach((v, c) => {
+      if (v) {
+        grid[r0 + r][c0 + c] = 1;
+        cellColor[r0 + r][c0 + c] = piece.color;
+      }
+    });
+  });
+  let placedCells = piece.shape.flat().filter(v => v).length;
+  score += placedCells;
+
+  const fullRows = [];
+  const fullCols = [];
+  for (let r = 0; r < SIZE; r++) {
+    if (grid[r].every(v => v)) fullRows.push(r);
+  }
+  for (let c = 0; c < SIZE; c++) {
+    if (grid.every(row => row[c])) fullCols.push(c);
+  }
+  const cleared = fullRows.length + fullCols.length;
+  fullRows.forEach(r => { for (let c = 0; c < SIZE; c++) { grid[r][c] = 0; cellColor[r][c] = null; } });
+  fullCols.forEach(c => { for (let r = 0; r < SIZE; r++) { grid[r][c] = 0; cellColor[r][c] = null; } });
+  if (cleared > 0) {
+    score += cleared * 10 * cleared;
+    launchConfetti(25 * cleared);
+  }
+
+  scoreEl.textContent = score;
+  if (score > highscore) {
+    highscore = score;
+    highscoreEl.textContent = highscore;
+    localStorage.setItem('blocoHighscore', highscore);
+  }
+  renderBoard();
+
+  const boardEmpty = grid.every(row => row.every(v => !v));
+  if (cleared > 0 && boardEmpty) {
+    paletteIdx = (paletteIdx + 1) % PALETTES.length;
+    COLORS = PALETTES[paletteIdx];
+    setTimeout(() => launchConfetti(70), 150);
+  }
+}
+
+function attachDrag(slot, idx) {
+  const startDrag = (clientX, clientY) => {
+    const piece = tray[idx];
+    if (!piece || piece.used) return;
+    dragging = { idx, piece, offsetX: 0, offsetY: 0 };
+    slot.classList.add('dragging-source');
+    buildGhost(piece);
+    moveGhost(clientX, clientY);
+    dragGhost.style.display = 'block';
+  };
+
+  slot.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY));
+  slot.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    startDrag(t.clientX, t.clientY);
+  }, { passive: true });
+}
+
+function buildGhost(piece) {
+  dragGhost.innerHTML = '';
+  const cellSize = boardEl.getBoundingClientRect().width / SIZE;
+  dragGhost.style.width = (piece.shape[0].length * cellSize) + 'px';
+  dragGhost.style.height = (piece.shape.length * cellSize) + 'px';
+  piece.shape.forEach((row, r) => {
+    row.forEach((v, c) => {
+      if (!v) return;
+      const gc = document.createElement('div');
+      gc.className = 'ghost-cell';
+      gc.style.width = (cellSize - 3) + 'px';
+      gc.style.height = (cellSize - 3) + 'px';
+      gc.style.left = (c * cellSize) + 'px';
+      gc.style.top = (r * cellSize) + 'px';
+      gc.style.background = piece.color;
+      dragGhost.appendChild(gc);
+    });
+  });
+}
+
+function moveGhost(clientX, clientY) {
+  const rect = dragGhost.getBoundingClientRect();
+  dragGhost.style.left = (clientX - rect.width / 2) + 'px';
+  dragGhost.style.top = (clientY - rect.height * 0.9) + 'px';
+}
+
+function boardPosFromClient(clientX, clientY, piece) {
+  const boardRect = boardEl.getBoundingClientRect();
+  const cellSize = boardRect.width / SIZE;
+  const anchorX = clientX - (piece.shape[0].length * cellSize) / 2;
+  const anchorY = clientY - (piece.shape.length * cellSize) * 0.9;
+  const c0 = Math.round((anchorX - boardRect.left) / cellSize);
+  const r0 = Math.round((anchorY - boardRect.top) / cellSize);
+  return { r0, c0 };
+}
+
+function clearPreview() {
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      cellEls[r][c].classList.remove('preview-ok', 'preview-bad');
+    }
+  }
+}
+
+function showPreview(shape, r0, c0) {
+  clearPreview();
+  const ok = canPlace(shape, r0, c0);
+  shape.forEach((row, r) => {
+    row.forEach((v, c) => {
+      if (!v) return;
+      const rr = r0 + r, cc = c0 + c;
+      if (rr >= 0 && rr < SIZE && cc >= 0 && cc < SIZE) {
+        cellEls[rr][cc].classList.add(ok ? 'preview-ok' : 'preview-bad');
+      }
+    });
+  });
+}
+
+function endDrag(clientX, clientY) {
+  if (!dragging) return;
+  const { piece, idx } = dragging;
+  const { r0, c0 } = boardPosFromClient(clientX, clientY, piece);
+  clearPreview();
+  dragGhost.style.display = 'none';
+  const slots = document.querySelectorAll('.piece-slot');
+  slots.forEach(s => s.classList.remove('dragging-source'));
+
+  if (canPlace(piece.shape, r0, c0)) {
+    placePiece(piece, r0, c0);
+    tray[idx].used = true;
+    if (tray.every(p => p.used)) {
+      tray = [randomPiece(), randomPiece(), randomPiece()];
+    }
+    renderTray();
+    if (!anyPlacementPossible()) {
+      overlayScoreEl.textContent = 'Pontos: ' + score;
+      overlayEl.style.display = 'block';
+    }
+  }
+  dragging = null;
+}
+
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  moveGhost(e.clientX, e.clientY);
+  const { r0, c0 } = boardPosFromClient(e.clientX, e.clientY, dragging.piece);
+  showPreview(dragging.piece.shape, r0, c0);
+});
+window.addEventListener('mouseup', (e) => endDrag(e.clientX, e.clientY));
+
+window.addEventListener('touchmove', (e) => {
+  if (!dragging) return;
+  e.preventDefault();
+  const t = e.touches[0];
+  moveGhost(t.clientX, t.clientY);
+  const { r0, c0 } = boardPosFromClient(t.clientX, t.clientY, dragging.piece);
+  showPreview(dragging.piece.shape, r0, c0);
+}, { passive: false });
+
+window.addEventListener('touchend', (e) => {
+  if (!dragging) return;
+  const t = e.changedTouches[0];
+  endDrag(t.clientX, t.clientY);
+});
+
+document.getElementById('restartBtn').addEventListener('click', init);
+window.addEventListener('resize', resizeConfettiCanvas);
+
+init();
+</script>
+</body>
+</html>
